@@ -24,7 +24,6 @@ if "logado" not in st.session_state:
 if 'rerun' not in st.session_state:
     st.session_state['rerun'] = 0
 
-# Função para forçar rerun
 def forcar_rerun():
     st.session_state['rerun'] += 1
 
@@ -181,7 +180,7 @@ if not df.empty:
 else:
     df_filtrado = df
 
-# ---------------- MINI DASHBOARD ----------------
+# ---------------- MINI DASHBOARD COLORIDO ----------------
 if not df_filtrado.empty:
     st.subheader("💰 Resumo Financeiro")
 
@@ -190,12 +189,15 @@ if not df_filtrado.empty:
     despesa = resumo_tipo.get("Despesa", 0)
     saldo = receita - despesa
 
+    cor_saldo = "normal"  # verde padrão
+    if saldo < 0:
+        cor_saldo = "inverse"  # vermelho
+
     col1, col2, col3 = st.columns(3)
     col1.metric("Receita", f"R$ {receita:.2f}")
     col2.metric("Despesa", f"R$ {despesa:.2f}")
-    col3.metric("Saldo", f"R$ {saldo:.2f}")
+    col3.metric("Saldo", f"R$ {saldo:.2f}", delta=None, delta_color=cor_saldo)
 
-    # Gráfico Receita x Despesa
     st.subheader("📈 Gráfico Receita x Despesa")
     st.bar_chart(resumo_tipo)
 
@@ -227,7 +229,6 @@ if not df_filtrado.empty:
         file_name=f"relatorio_{usuario}.pdf",
         mime="application/pdf"
     )
-
 else:
     st.info("Nenhum lançamento para o período selecionado.")
 
