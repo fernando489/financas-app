@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 from pathlib import Path
+from io import BytesIO
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table
 from reportlab.lib.styles import getSampleStyleSheet
 
@@ -28,9 +29,9 @@ def forcar_rerun():
     st.session_state['rerun'] += 1
 
 # ---------------- FUNÇÕES ----------------
-def salvar_pdf(df, usuario):
-    pdf_path = BASE_PATH / f"relatorio_{usuario}.pdf"
-    doc = SimpleDocTemplate(str(pdf_path))
+def gerar_pdf_memoria(df, usuario):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer)
     styles = getSampleStyleSheet()
     elementos = []
 
@@ -50,8 +51,8 @@ def salvar_pdf(df, usuario):
 
     elementos.append(Table(tabela))
     doc.build(elementos)
-
-    return pdf_path
+    buffer.seek(0)
+    return buffer
 
 # ---------------- LOGIN / CADASTRO ----------------
 if not st.session_state.logado:
@@ -69,17 +70,15 @@ if not st.session_state.logado:
         if entrar:
             if USUARIOS_FILE.exists():
                 df_users = pd.read_csv(USUARIOS_FILE, dtype=str)
-
                 ok = df_users[
                     (df_users["usuario"].str.strip() == user.strip()) &
                     (df_users["senha"].str.strip() == senha.strip())
                 ]
-
                 if not ok.empty:
                     st.session_state.logado = True
                     st.session_state.usuario = user
                     st.success("✅ Login realizado!")
-                    forcar_rerun()  # substitui st.rerun()
+                    forcar_rerun()
                 else:
                     st.error("❌ Usuário ou senha inválidos")
             else:
@@ -113,17 +112,23 @@ if not st.session_state.logado:
                     df_users.to_csv(USUARIOS_FILE, index=False)
                     st.success("✅ Usuário cadastrado! Pode fazer login.")
 
-    st.stop()
+    st.stop()  # mantém bloqueio até o login
 
 # ---------------- APP ----------------
 usuario = st.session_state.usuario
 st.title("💼 Sistema Financeiro")
 st.write(f"👤 Cliente: **{usuario}**")
 
+# ---------------- CARREGAMENTO DE DADOS ----------------
 ARQUIVO_CLIENTE = DATA_PATH / f"{usuario}.csv"
 
 if ARQUIVO_CLIENTE.exists():
-    df = pd.read_csv(ARQUIVO_CLIENTE, parse_dates=["data"])
+    df = pd.read_csv(ARQUIVO_CLIENTE)
+    if "data" in df.columns:
+        df["data"] = pd.to_datetime(df["data"], errors="coerce")
+        df = df.dropna(subset=["data"])
+    else:
+        df = pd.DataFrame(columns=["data", "descricao", "valor", "tipo", "categoria"])
 else:
     df = pd.DataFrame(columns=["data", "descricao", "valor", "tipo", "categoria"])
 
@@ -159,15 +164,14 @@ if salvar:
     df = pd.concat([df, novo], ignore_index=True)
     df.to_csv(ARQUIVO_CLIENTE, index=False)
     st.success("✅ Lançamento salvo!")
-    forcar_rerun()  # substitui st.rerun()
+    forcar_rerun()
 
-# ---------------- FILTRO MÊS ----------------
+# ---------------- FILTRO POR MÊS ----------------
 st.subheader("📆 Filtro por mês")
 
 if not df.empty:
     df["mes"] = df["data"].dt.to_period("M").astype(str)
     meses = sorted(df["mes"].unique())
-
     mes_sel = st.selectbox("Selecione o mês", ["Todos"] + meses)
 
     if mes_sel != "Todos":
@@ -177,7 +181,25 @@ if not df.empty:
 else:
     df_filtrado = df
 
-# ---------------- LISTA ----------------
+# ---------------- MINI DASHBOARD ----------------
+if not df_filtrado.empty:
+    st.subheader("💰 Resumo Financeiro")
+
+    resumo_tipo = df_filtrado.groupby("tipo")["valor"].sum()
+    receita = resumo_tipo.get("Receita", 0)
+    despesa = resumo_tipo.get("Despesa", 0)
+    saldo = receita - despesa
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Receita", f"R$ {receita:.2f}")
+    col2.metric("Despesa", f"R$ {despesa:.2f}")
+    col3.metric("Saldo", f"R$ {saldo:.2f}")
+
+    # Gráfico Receita x Despesa
+    st.subheader("📈 Gráfico Receita x Despesa")
+    st.bar_chart(resumo_tipo)
+
+# ---------------- LISTA DE LANÇAMENTOS ----------------
 if not df_filtrado.empty:
     st.subheader("📋 Lançamentos")
 
@@ -192,25 +214,19 @@ if not df_filtrado.empty:
         if c6.button("❌", key=f"del_{i}"):
             df = df.drop(i)
             df.to_csv(ARQUIVO_CLIENTE, index=False)
-            forcar_rerun()  # substitui st.rerun()
+            forcar_rerun()
 
-    # ---------------- GRÁFICO ----------------
-    st.subheader("📈 Receita x Despesa")
-
-    resumo = df_filtrado.groupby("tipo")["valor"].sum()
-    st.bar_chart(resumo)
-
-    # ---------------- PDF ----------------
+# ---------------- PDF ----------------
+if not df_filtrado.empty:
     st.subheader("🧾 Relatório em PDF")
+    pdf_buffer = gerar_pdf_memoria(df_filtrado, usuario)
 
-    pdf_path = salvar_pdf(df_filtrado, usuario)
-
-    with open(pdf_path, "rb") as f:
-        st.download_button(
-            "Download PDF",
-            data=f,
-            file_name=f"relatorio_{usuario}.pdf"
-        )
+    st.download_button(
+        "Download PDF",
+        data=pdf_buffer,
+        file_name=f"relatorio_{usuario}.pdf",
+        mime="application/pdf"
+    )
 
 else:
     st.info("Nenhum lançamento para o período selecionado.")
@@ -220,4 +236,4 @@ st.divider()
 if st.button("Sair"):
     st.session_state.logado = False
     st.session_state.usuario = None
-    forcar_rerun()  # substitui st.rerun()
+    forcar_rerun()
