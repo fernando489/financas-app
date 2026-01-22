@@ -1,210 +1,223 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
-from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table
 from reportlab.lib.styles import getSampleStyleSheet
-from docx import Document
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="Sistema Financeiro MEI", layout="centered")
 
 BASE_PATH = Path(".")
 DATA_PATH = BASE_PATH / "data" / "clientes"
-OUTPUT_PATH = BASE_PATH / "outputs"
-LOGS_PATH = BASE_PATH / "logs"
+DATA_PATH.mkdir(parents=True, exist_ok=True)
+
 USUARIOS_FILE = BASE_PATH / "usuarios.csv"
 
-for p in [DATA_PATH, OUTPUT_PATH, LOGS_PATH]:
-    p.mkdir(parents=True, exist_ok=True)
-
-# ---------------- LOGIN ----------------
+# ---------------- SESSION ----------------
 if "logado" not in st.session_state:
     st.session_state.logado = False
     st.session_state.usuario = None
 
+# Inicializa a flag de rerun
+if 'rerun' not in st.session_state:
+    st.session_state['rerun'] = 0
+
+# Função para forçar rerun
+def forcar_rerun():
+    st.session_state['rerun'] += 1
+
+# ---------------- FUNÇÕES ----------------
+def salvar_pdf(df, usuario):
+    pdf_path = BASE_PATH / f"relatorio_{usuario}.pdf"
+    doc = SimpleDocTemplate(str(pdf_path))
+    styles = getSampleStyleSheet()
+    elementos = []
+
+    elementos.append(Paragraph(f"<b>Relatório Financeiro - {usuario}</b>", styles["Title"]))
+    elementos.append(Spacer(1, 10))
+
+    tabela = [["Data", "Descrição", "Tipo", "Valor", "Categoria"]]
+
+    for _, r in df.iterrows():
+        tabela.append([
+            str(r["data"])[:10],
+            r["descricao"],
+            r["tipo"],
+            f"R$ {r['valor']:.2f}",
+            r["categoria"]
+        ])
+
+    elementos.append(Table(tabela))
+    doc.build(elementos)
+
+    return pdf_path
+
+# ---------------- LOGIN / CADASTRO ----------------
 if not st.session_state.logado:
-    st.title("🔐 Login")
 
-    user = st.text_input("Usuário")
-    senha = st.text_input("Senha", type="password")
-    entrar = st.button("Entrar")
+    aba = st.tabs(["🔐 Login", "🆕 Cadastro"])
 
-    if entrar:
-        if USUARIOS_FILE.exists():
-            df_users = pd.read_csv(USUARIOS_FILE)
-            ok = df_users[
-                (df_users["usuario"] == user) &
-                (df_users["senha"] == senha)
-            ]
-            if not ok.empty:
-                st.session_state.logado = True
-                st.session_state.usuario = user
-                st.experimental_rerun()
+    # -------- LOGIN --------
+    with aba[0]:
+        st.subheader("Login")
+
+        user = st.text_input("Usuário")
+        senha = st.text_input("Senha", type="password")
+        entrar = st.button("Entrar")
+
+        if entrar:
+            if USUARIOS_FILE.exists():
+                df_users = pd.read_csv(USUARIOS_FILE, dtype=str)
+
+                ok = df_users[
+                    (df_users["usuario"].str.strip() == user.strip()) &
+                    (df_users["senha"].str.strip() == senha.strip())
+                ]
+
+                if not ok.empty:
+                    st.session_state.logado = True
+                    st.session_state.usuario = user
+                    st.success("✅ Login realizado!")
+                    forcar_rerun()  # substitui st.rerun()
+                else:
+                    st.error("❌ Usuário ou senha inválidos")
             else:
-                st.error("Usuário ou senha inválidos")
-        else:
-            st.error("Arquivo usuarios.csv não encontrado")
+                st.error("❌ Arquivo usuarios.csv não encontrado")
+
+    # -------- CADASTRO --------
+    with aba[1]:
+        st.subheader("Cadastro de Novo Usuário")
+
+        novo_user = st.text_input("Novo usuário")
+        nova_senha = st.text_input("Nova senha", type="password")
+        cadastrar = st.button("Cadastrar")
+
+        if cadastrar:
+            if not novo_user or not nova_senha:
+                st.warning("Preencha usuário e senha")
+            else:
+                if USUARIOS_FILE.exists():
+                    df_users = pd.read_csv(USUARIOS_FILE, dtype=str)
+                else:
+                    df_users = pd.DataFrame(columns=["usuario", "senha"])
+
+                if (df_users["usuario"] == novo_user).any():
+                    st.error("Usuário já existe")
+                else:
+                    novo = pd.DataFrame([{
+                        "usuario": novo_user,
+                        "senha": nova_senha
+                    }])
+                    df_users = pd.concat([df_users, novo], ignore_index=True)
+                    df_users.to_csv(USUARIOS_FILE, index=False)
+                    st.success("✅ Usuário cadastrado! Pode fazer login.")
 
     st.stop()
 
-# ---------------- LOGOUT ----------------
-colL, colR = st.columns([6,1])
-with colR:
-    if st.button("🚪 Sair"):
-        st.session_state.logado = False
-        st.session_state.usuario = None
-        st.experimental_rerun()
-
-cliente = st.session_state.usuario
-st.title("💼 Sistema Financeiro MEI")
-st.caption(f"Cliente: {cliente}")
-
-# ---------------- FUNÇÕES ----------------
-def registrar_log(acao):
-    log_file = LOGS_PATH / "access_log.csv"
-    log = pd.DataFrame([{
-        "cliente": cliente,
-        "acao": acao,
-        "data_hora": datetime.now()
-    }])
-    if log_file.exists():
-        df_log = pd.read_csv(log_file)
-        df_log = pd.concat([df_log, log], ignore_index=True)
-    else:
-        df_log = log
-    df_log.to_csv(log_file, index=False)
-
-def salvar_lancamento(registro):
-    arq = DATA_PATH / f"{cliente}.csv"
-    if arq.exists():
-        df = pd.read_csv(arq, parse_dates=["data"])
-        df = pd.concat([df, registro], ignore_index=True)
-    else:
-        df = registro
-    df.to_csv(arq, index=False)
-    registrar_log("Lançamento adicionado")
-
-def carregar_dados():
-    arq = DATA_PATH / f"{cliente}.csv"
-    if arq.exists():
-        return pd.read_csv(arq, parse_dates=["data"])
-    return pd.DataFrame(columns=["data","descricao","valor","tipo","categoria"])
-
-def salvar_todos(df):
-    arq = DATA_PATH / f"{cliente}.csv"
-    df.to_csv(arq, index=False)
-
-def gerar_pdf(df_mes, mes, ano, receitas, despesas, saldo):
-    nome = f"relatorio_{cliente}_{mes}_{ano}.pdf"
-    path = OUTPUT_PATH / nome
-
-    doc = SimpleDocTemplate(str(path), pagesize=A4)
-    styles = getSampleStyleSheet()
-    e = []
-
-    e.append(Paragraph("<b>Relatório Financeiro Mensal</b>", styles["Title"]))
-    e.append(Paragraph(f"Cliente: {cliente}", styles["Normal"]))
-    e.append(Paragraph(f"Mês/Ano: {mes}/{ano}", styles["Normal"]))
-    e.append(Spacer(1, 10))
-    e.append(Paragraph(f"Receitas: R$ {receitas:,.2f}", styles["Normal"]))
-    e.append(Paragraph(f"Despesas: R$ {despesas:,.2f}", styles["Normal"]))
-    e.append(Paragraph(f"Saldo: R$ {saldo:,.2f}", styles["Normal"]))
-    e.append(Spacer(1, 10))
-
-    tabela = [df_mes.columns.tolist()] + df_mes.astype(str).values.tolist()
-    e.append(Table(tabela, repeatRows=1))
-    doc.build(e)
-    return path
-
-def gerar_excel(df_mes, mes, ano):
-    nome = f"relatorio_{cliente}_{mes}_{ano}.xlsx"
-    path = OUTPUT_PATH / nome
-    df_mes.to_excel(path, index=False)
-    return path
-
-def gerar_word(df_mes, mes, ano):
-    nome = f"relatorio_{cliente}_{mes}_{ano}.docx"
-    path = OUTPUT_PATH / nome
-    doc = Document()
-    doc.add_heading(f'Relatório Financeiro - {cliente}', 0)
-    doc.add_paragraph(f"Mês/Ano: {mes}/{ano}")
-
-    table = doc.add_table(rows=1, cols=len(df_mes.columns))
-    for i, col in enumerate(df_mes.columns):
-        table.rows[0].cells[i].text = col
-
-    for _, row in df_mes.iterrows():
-        cells = table.add_row().cells
-        for i, col in enumerate(df_mes.columns):
-            cells[i].text = str(row[col])
-
-    doc.save(path)
-    return path
-
 # ---------------- APP ----------------
-df = carregar_dados()
+usuario = st.session_state.usuario
+st.title("💼 Sistema Financeiro")
+st.write(f"👤 Cliente: **{usuario}**")
 
+ARQUIVO_CLIENTE = DATA_PATH / f"{usuario}.csv"
+
+if ARQUIVO_CLIENTE.exists():
+    df = pd.read_csv(ARQUIVO_CLIENTE, parse_dates=["data"])
+else:
+    df = pd.DataFrame(columns=["data", "descricao", "valor", "tipo", "categoria"])
+
+# ---------------- FORM ----------------
 st.subheader("📝 Novo lançamento")
-with st.form("form_lanc"):
-    c1, c2 = st.columns(2)
-    with c1:
-        data = st.date_input("Data", value=date.today())
-        desc = st.text_input("Descrição")
-    with c2:
-        valor = st.number_input("Valor (R$)", step=0.01, format="%.2f")
-        tipo = st.selectbox("Tipo", ["Despesa","Receita"])
-        cat = st.selectbox("Categoria", ["Aluguel","Fornecedor","Combustível","Alimentação","Impostos","Outros"])
-    ok = st.form_submit_button("Salvar")
 
-if ok:
+with st.form("form_lancamento", clear_on_submit=True):
+    col1, col2 = st.columns(2)
+
+    with col1:
+        data = st.date_input("Data", value=date.today())
+        descricao = st.text_input("Descrição")
+
+    with col2:
+        valor = st.number_input("Valor (R$)", step=0.01, format="%.2f")
+        tipo = st.selectbox("Tipo", ["Despesa", "Receita"])
+        categoria_base = st.selectbox(
+            "Categoria",
+            ["Aluguel", "Fornecedor", "Combustível", "Alimentação", "Impostos", "Outros"]
+        )
+        categoria = st.text_input("Categoria personalizada") if categoria_base == "Outros" else categoria_base
+
+    salvar = st.form_submit_button("Salvar lançamento")
+
+if salvar:
     novo = pd.DataFrame([{
-        "data": data, "descricao": desc, "valor": valor, "tipo": tipo, "categoria": cat
+        "data": data,
+        "descricao": descricao,
+        "valor": valor,
+        "tipo": tipo,
+        "categoria": categoria
     }])
-    salvar_lancamento(novo)
-    st.success("Salvo!")
-    st.experimental_rerun()
+    df = pd.concat([df, novo], ignore_index=True)
+    df.to_csv(ARQUIVO_CLIENTE, index=False)
+    st.success("✅ Lançamento salvo!")
+    forcar_rerun()  # substitui st.rerun()
+
+# ---------------- FILTRO MÊS ----------------
+st.subheader("📆 Filtro por mês")
 
 if not df.empty:
-    st.subheader("📊 Relatórios")
+    df["mes"] = df["data"].dt.to_period("M").astype(str)
+    meses = sorted(df["mes"].unique())
 
-    df["mes"] = df["data"].dt.month
-    df["ano"] = df["data"].dt.year
+    mes_sel = st.selectbox("Selecione o mês", ["Todos"] + meses)
 
-    mes = st.selectbox("Mês", sorted(df["mes"].unique()))
-    ano = st.selectbox("Ano", sorted(df["ano"].unique()))
+    if mes_sel != "Todos":
+        df_filtrado = df[df["mes"] == mes_sel]
+    else:
+        df_filtrado = df
+else:
+    df_filtrado = df
 
-    df_mes = df[(df["mes"]==mes)&(df["ano"]==ano)]
+# ---------------- LISTA ----------------
+if not df_filtrado.empty:
+    st.subheader("📋 Lançamentos")
 
-    st.subheader("📋 Lançamentos (clique para excluir)")
-    for i, row in df_mes.iterrows():
-        col1, col2 = st.columns([8,1])
-        with col1:
-            st.write(f"{row['data'].date()} | {row['descricao']} | {row['tipo']} | R$ {row['valor']:.2f} | {row['categoria']}")
-        with col2:
-            if st.button("❌", key=f"del{i}"):
-                df = df.drop(i)
-                salvar_todos(df)
-                st.experimental_rerun()
+    for i, row in df_filtrado.iterrows():
+        c1, c2, c3, c4, c5, c6 = st.columns([2, 3, 2, 2, 2, 1])
+        c1.write(str(row["data"])[:10])
+        c2.write(row["descricao"])
+        c3.write(row["tipo"])
+        c4.write(f"R$ {row['valor']:.2f}")
+        c5.write(row["categoria"])
 
-    receitas = df_mes[df_mes["tipo"]=="Receita"]["valor"].sum()
-    despesas = df_mes[df_mes["tipo"]=="Despesa"]["valor"].sum()
-    saldo = receitas - despesas
+        if c6.button("❌", key=f"del_{i}"):
+            df = df.drop(i)
+            df.to_csv(ARQUIVO_CLIENTE, index=False)
+            forcar_rerun()  # substitui st.rerun()
 
-    c1,c2,c3 = st.columns(3)
-    c1.metric("Receitas", f"R$ {receitas:,.2f}")
-    c2.metric("Despesas", f"R$ {despesas:,.2f}")
-    c3.metric("Saldo", f"R$ {saldo:,.2f}")
+    # ---------------- GRÁFICO ----------------
+    st.subheader("📈 Receita x Despesa")
 
-    st.subheader("⬇️ Downloads")
-    pdf = gerar_pdf(df_mes, mes, ano, receitas, despesas, saldo)
-    xls = gerar_excel(df_mes, mes, ano)
-    docx = gerar_word(df_mes, mes, ano)
+    resumo = df_filtrado.groupby("tipo")["valor"].sum()
+    st.bar_chart(resumo)
 
-    st.download_button("PDF", open(pdf,"rb"), file_name=pdf.name)
-    st.download_button("Excel", open(xls,"rb"), file_name=xls.name)
-    st.download_button("Word", open(docx,"rb"), file_name=docx.name)
+    # ---------------- PDF ----------------
+    st.subheader("🧾 Relatório em PDF")
+
+    pdf_path = salvar_pdf(df_filtrado, usuario)
+
+    with open(pdf_path, "rb") as f:
+        st.download_button(
+            "Download PDF",
+            data=f,
+            file_name=f"relatorio_{usuario}.pdf"
+        )
 
 else:
-    st.info("Nenhum lançamento ainda.")
+    st.info("Nenhum lançamento para o período selecionado.")
+
+# ---------------- LOGOUT ----------------
+st.divider()
+if st.button("Sair"):
+    st.session_state.logado = False
+    st.session_state.usuario = None
+    forcar_rerun()  # substitui st.rerun()
