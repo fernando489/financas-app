@@ -20,7 +20,6 @@ if "logado" not in st.session_state:
     st.session_state.logado = False
     st.session_state.usuario = None
 
-# Inicializa a flag de rerun
 if 'rerun' not in st.session_state:
     st.session_state['rerun'] = 0
 
@@ -58,10 +57,8 @@ if not st.session_state.logado:
 
     aba = st.tabs(["🔐 Login", "🆕 Cadastro"])
 
-    # -------- LOGIN --------
     with aba[0]:
         st.subheader("Login")
-
         user = st.text_input("Usuário")
         senha = st.text_input("Senha", type="password")
         entrar = st.button("Entrar")
@@ -83,10 +80,8 @@ if not st.session_state.logado:
             else:
                 st.error("❌ Arquivo usuarios.csv não encontrado")
 
-    # -------- CADASTRO --------
     with aba[1]:
         st.subheader("Cadastro de Novo Usuário")
-
         novo_user = st.text_input("Novo usuário")
         nova_senha = st.text_input("Nova senha", type="password")
         cadastrar = st.button("Cadastrar")
@@ -103,15 +98,12 @@ if not st.session_state.logado:
                 if (df_users["usuario"] == novo_user).any():
                     st.error("Usuário já existe")
                 else:
-                    novo = pd.DataFrame([{
-                        "usuario": novo_user,
-                        "senha": nova_senha
-                    }])
+                    novo = pd.DataFrame([{"usuario": novo_user, "senha": nova_senha}])
                     df_users = pd.concat([df_users, novo], ignore_index=True)
                     df_users.to_csv(USUARIOS_FILE, index=False)
                     st.success("✅ Usuário cadastrado! Pode fazer login.")
 
-    st.stop()  # mantém bloqueio até o login
+    st.stop()
 
 # ---------------- APP ----------------
 usuario = st.session_state.usuario
@@ -123,24 +115,24 @@ ARQUIVO_CLIENTE = DATA_PATH / f"{usuario}.csv"
 
 if ARQUIVO_CLIENTE.exists():
     df = pd.read_csv(ARQUIVO_CLIENTE)
-    if "data" in df.columns:
-        df["data"] = pd.to_datetime(df["data"], errors="coerce")
-        df = df.dropna(subset=["data"])
-    else:
-        df = pd.DataFrame(columns=["data", "descricao", "valor", "tipo", "categoria"])
 else:
     df = pd.DataFrame(columns=["data", "descricao", "valor", "tipo", "categoria"])
+
+# Garante coluna "data" datetime
+if "data" not in df.columns:
+    df["data"] = pd.to_datetime([])  # cria coluna vazia
+else:
+    df["data"] = pd.to_datetime(df["data"], errors="coerce")
+    df = df.dropna(subset=["data"])
 
 # ---------------- FORM ----------------
 st.subheader("📝 Novo lançamento")
 
 with st.form("form_lancamento", clear_on_submit=True):
     col1, col2 = st.columns(2)
-
     with col1:
         data = st.date_input("Data", value=date.today())
         descricao = st.text_input("Descrição")
-
     with col2:
         valor = st.number_input("Valor (R$)", step=0.01, format="%.2f")
         tipo = st.selectbox("Tipo", ["Despesa", "Receita"])
@@ -164,13 +156,18 @@ if salvar:
     df.to_csv(ARQUIVO_CLIENTE, index=False)
     st.success("✅ Lançamento salvo!")
     forcar_rerun()
-
 # ---------------- FILTRO POR MÊS ----------------
 st.subheader("📆 Filtro por mês")
 
-if not df.empty:
+# Só cria coluna "mes" se houver datas válidas
+if not df.empty and "data" in df.columns and not df["data"].dropna().empty:
+    # garante datetime de forma segura
+    df["data"] = pd.to_datetime(df["data"], errors="coerce")
+    df = df.dropna(subset=["data"])
+
     df["mes"] = df["data"].dt.to_period("M").astype(str)
     meses = sorted(df["mes"].unique())
+
     mes_sel = st.selectbox("Selecione o mês", ["Todos"] + meses)
 
     if mes_sel != "Todos":
@@ -178,7 +175,8 @@ if not df.empty:
     else:
         df_filtrado = df
 else:
-    df_filtrado = df
+    df_filtrado = df.copy()
+
 
 # ---------------- MINI DASHBOARD COLORIDO ----------------
 if not df_filtrado.empty:
@@ -189,9 +187,9 @@ if not df_filtrado.empty:
     despesa = resumo_tipo.get("Despesa", 0)
     saldo = receita - despesa
 
-    cor_saldo = "normal"  # verde padrão
+    cor_saldo = "normal"  # verde positivo
     if saldo < 0:
-        cor_saldo = "inverse"  # vermelho
+        cor_saldo = "inverse"  # vermelho negativo
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Receita", f"R$ {receita:.2f}")
@@ -204,7 +202,6 @@ if not df_filtrado.empty:
 # ---------------- LISTA DE LANÇAMENTOS ----------------
 if not df_filtrado.empty:
     st.subheader("📋 Lançamentos")
-
     for i, row in df_filtrado.iterrows():
         c1, c2, c3, c4, c5, c6 = st.columns([2, 3, 2, 2, 2, 1])
         c1.write(str(row["data"])[:10])
@@ -212,7 +209,6 @@ if not df_filtrado.empty:
         c3.write(row["tipo"])
         c4.write(f"R$ {row['valor']:.2f}")
         c5.write(row["categoria"])
-
         if c6.button("❌", key=f"del_{i}"):
             df = df.drop(i)
             df.to_csv(ARQUIVO_CLIENTE, index=False)
@@ -222,7 +218,6 @@ if not df_filtrado.empty:
 if not df_filtrado.empty:
     st.subheader("🧾 Relatório em PDF")
     pdf_buffer = gerar_pdf_memoria(df_filtrado, usuario)
-
     st.download_button(
         "Download PDF",
         data=pdf_buffer,
